@@ -1,4 +1,3 @@
-
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
@@ -8,9 +7,10 @@ pkgs.mkShell {
     cmake
     ninja
     gcc-arm-embedded
+    libnats-c
   ];
   nativeBuildInputs = [
-      pkgs.libusb1
+    pkgs.libusb1
   ];
 
 

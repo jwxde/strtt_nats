@@ -45,11 +45,10 @@ else()
     add_executable(strtt ${strtt_source_files})
 
     IF (WIN32)
-        target_link_libraries(strtt stlink ws2_32 Threads::Threads)
+        target_link_libraries(strtt nats stlink ws2_32 Threads::Threads)
     ELSE()
-        target_link_libraries(strtt stlink Threads::Threads)
+        target_link_libraries(strtt nats stlink Threads::Threads)
     ENDIF()
-
 
 endif()
 

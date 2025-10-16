@@ -1,6 +1,19 @@
 # strtt
 Segger RTT client using ST-link debugger.
 
+This fork has NATS support.
+When starting it tries to connect to a local NATS server on the default port.
+There are currently no options to change the port.
+If no server is found, the NATS functionality is silently disabled.
+No automatic (re)connection attempts are made.
+
+All data received on channel 0 is published to subject `strtt_console_up`.
+All data received on channel 2 is published byte for byte to subject `strtt_up`.
+All data received from NATS subject `strtt_console_down` is sent to channel 0.
+
+Data is published to NATS as strtt discovers it on the RTT channels.
+No chunking/waiting for line breaks or similar is done.
+
 Options:
 
 **-v** debugLevel where debugLevel from -3 to 4 when -3 is equal to silent output

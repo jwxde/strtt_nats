@@ -8,6 +8,12 @@
 #include "inputparser.h"
 #include "consoleinput.h"
 
+#define NATS
+
+#ifdef NATS
+#include <nats/nats.h>
+#endif
+
 // #define SYSVIEW
 
 #ifdef SYSVIEW
@@ -150,6 +156,18 @@ int main(int argc, char **argv)
     _sv = new SysView(port);
 #endif
 
+#ifdef NATS
+    natsConnection      *nc  = NULL;
+    natsSubscription    *sub = NULL;
+    natsMsg             *msg = NULL;
+
+    // Connects to the default NATS Server running locally
+    natsStatus natsStatus = natsConnection_ConnectTo(&nc, NATS_DEFAULT_URL);
+    if(natsStatus == NATS_OK) {
+        natsConnection_SubscribeSync(&sub, nc, "strtt_console_down");
+    }
+#endif
+
     strtt->addChannelHandler([&](const int index, const std::vector<uint8_t> *buffer)
                              {
                                  if (index == 0)
@@ -160,8 +178,17 @@ int main(int argc, char **argv)
                                          fputc(ch, stdout);
                                      }
                                      fflush(stdout);
+#ifdef NATS
+                                     natsConnection_Publish(nc, "strtt_console_up", (const void*) buffer->data(), (int)buffer->size());
+#endif
                                  }
 
+#ifdef NATS
+                                 else if (index == 2)
+                                 {
+                                     natsConnection_Publish(nc, "strtt_up", (const void*) buffer->data(), (int)buffer->size());
+                                 }
+#endif
 #ifdef SYSVIEW
                                  else if (index == 1)
                                  {
@@ -200,6 +227,19 @@ int main(int argc, char **argv)
             strtt->writeRtt(0, &str);
         }
 
+#ifdef NATS
+        if (NATS_OK == natsSubscription_NextMsg(&msg, sub, 0)) {
+            std::vector<uint8_t> buffer;
+            int l = natsMsg_GetDataLength(msg);
+            const char* data = natsMsg_GetData(msg);
+            for(int i = 0; i < l; i++) {
+              buffer.push_back(data[i]);
+            }
+            strtt->writeRtt(0, &buffer);
+            // Don't forget to destroy the message!
+            natsMsg_Destroy(msg);
+        }
+#endif
 #ifdef SYSVIEW
         // write SysView
         if (_sv->dataToSTM())
@@ -217,5 +257,8 @@ int main(int argc, char **argv)
     }
 
     strtt->close();
+#ifdef NATS
+    natsConnection_Destroy(nc);
+#endif
     return 0;
 }
