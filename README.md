@@ -2,17 +2,38 @@
 Segger RTT client using ST-link debugger.
 
 This fork has NATS support.
+
 When starting it tries to connect to a local NATS server on the default port.
 There are currently no options to change the port.
 If no server is found, the NATS functionality is silently disabled.
 No automatic (re)connection attempts are made.
 
 All data received on channel 0 is published to subject `strtt_console_up`.
-All data received on channel 2 is published byte for byte to subject `strtt_up`.
 All data received from NATS subject `strtt_console_down` is sent to channel 0.
 
 Data is published to NATS as strtt discovers it on the RTT channels.
-No chunking/waiting for line breaks or similar is done.
+I.e. each transfer buffer received is published as one message.
+
+Data received on channel 2 is subjected to special treatment in order to
+create a facility for transmission of larger amounts of structured data
+via RTT.
+
+Data sent to channel 2 is assumed to be in Avro binary encoding with
+an additional layer of yEnc encoding applied so that newline characters
+(ASCII decimal 10) can be used to establish message boundaries.
+
+All data received on channel 2 is first broken down into single messages
+which are then yEnc decoded.
+So that the resulting messages are again Avro binary encoding.
+Any remainder bytes from the last transfer received (i.e.
+bytes that were following the last message boundary in the last transfer)
+are prepended to the first bytes received with the current transfer.
+
+All resulting Avro encoded messages are then published as one Avro array
+to the subject `strtt_up`.
+
+TODO: Explain why explicit message boundaries are needed and why relying on the
+alignment of messages with RTT buffer transfers is not good enough.
 
 Options:
 

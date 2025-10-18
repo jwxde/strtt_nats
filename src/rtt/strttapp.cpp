@@ -54,6 +54,73 @@ void signalHandler(int signum)
 // https://stackoverflow.com/questions/12207684/how-do-i-terminate-a-thread-in-c11
 // https://www.bo-yang.net/2017/11/19/cpp-kill-detached-thread
 
+#ifdef NATS
+
+void avro_write_zigged(std::vector<uint8_t> *buf, uint32_t v) {
+    if (v < 0x80) {
+        buf->push_back((uint8_t) v);
+    } else {
+        buf->push_back((uint8_t) ((v & 0x7f) | 0x80));
+        avro_write_zigged(buf, v >> 7);
+    }
+}
+
+void avro_write_int(std::vector<uint8_t> *buf, int v) {
+    if (v >= 0) {
+        avro_write_zigged(buf, v << 1);
+    } else {
+        avro_write_zigged(buf, ((-v) << 1) - 1);
+    }
+}
+
+enum yenc_status { ok, unexpected_byte, unexpected_escape };
+
+typedef struct {
+    enum yenc_status status;
+    int decoded_bytes;
+    int read_bytes;
+    uint8_t byte;
+} yenc_result;
+
+void yenc_decode(yenc_result *r, std::vector<uint8_t> *target, const std::vector<uint8_t> *source, int offset) {
+  int limit = source->size() - offset;
+  r->decoded_bytes = 0;
+  for(r->read_bytes = 0; r->read_bytes < limit; r->read_bytes++) {
+    int b;
+    r->byte = (*source)[offset + r->read_bytes];
+    switch(r->byte) {
+      case 10:
+        r->status = ok;
+        r->read_bytes++;
+        return;
+      case 0:
+      case 13:
+        r->status = unexpected_byte;
+        return;
+      case 61:
+        r->read_bytes++;
+        r->byte = (*source)[offset + r->read_bytes];
+        b = (r->byte + 256 - 64) % 256;
+        switch(b) {
+          case 0: case 10: case 13: case 61:
+            break;
+          default:
+            r->status = unexpected_escape;
+            return;
+        }
+        break;
+      default:
+        b = r->byte;
+    }
+    target->push_back((b + 256 - 42) % 256);
+    r->decoded_bytes++;
+  }
+  r->status = ok;
+  return;
+}
+
+#endif
+
 int main(int argc, char **argv)
 {
 
@@ -160,6 +227,9 @@ int main(int argc, char **argv)
     natsConnection      *nc  = NULL;
     natsSubscription    *sub = NULL;
     natsMsg             *msg = NULL;
+    std::vector<uint8_t> nats_buf(2000);
+    std::vector<uint8_t> nats_rest(2000);
+    yenc_result yenc = { ok, 0, 0, 0 };
 
     // Connects to the default NATS Server running locally
     natsStatus natsStatus = natsConnection_ConnectTo(&nc, NATS_DEFAULT_URL);
@@ -184,9 +254,49 @@ int main(int argc, char **argv)
                                  }
 
 #ifdef NATS
-                                 else if (index == 2)
+                                 else if (index == 2 && yenc.status == ok)
                                  {
-                                     natsConnection_Publish(nc, "strtt_up", (const void*) buffer->data(), (int)buffer->size());
+                                    int records = 0;
+                                    int last_end = 0;
+                                     for(int i = 0; i < buffer->size(); i++) {
+                                        if((*buffer)[i] == '\n') {
+                                          records++;
+                                          last_end = i;
+                                        }
+                                     }
+                                     LOG_DEBUG("-- starting to write %d messages (%d)", records, last_end);
+                                     nats_buf.clear();
+                                     // Mark the start of the array of records
+                                     avro_write_int(&nats_buf, 1);
+                                     yenc_decode(&yenc, &nats_buf, &nats_rest, 0); 
+                                     if(yenc.status == ok) {
+                                       LOG_DEBUG("--- (old) wrote %d bytes, read %d from %d", yenc.decoded_bytes, yenc.read_bytes, 0);
+                                     } else {
+                                       LOG_ERROR("--- yenc problem %d", yenc.status);
+                                     }
+                                     nats_rest.clear();
+                                     for(int i = 0; i <= last_end;) {
+                                       if(i > 0) avro_write_int(&nats_buf, 1);
+                                       yenc_decode(&yenc, &nats_buf, buffer, i);
+                                       if (yenc.status == ok) {
+                                         LOG_DEBUG("--- wrote %d bytes, read %d from %d", yenc.decoded_bytes, yenc.read_bytes, i);
+                                         if (yenc.read_bytes == 0) {
+                                           LOG_ERROR("yenc decode did not find any data");
+                                           break;
+                                         }
+                                         i += yenc.read_bytes;
+                                       } else {
+                                         LOG_ERROR("--- yenc problem %d", yenc.status);
+                                         break;
+                                       }
+                                     }
+                                     // Mark the end of the array of records
+                                     nats_buf.push_back(0);
+                                     natsConnection_Publish(nc, "strtt_up", (const void*) nats_buf.data(), (int) nats_buf.size());
+                                     // Keep the rest of the buffer for next time
+                                     for(int i = last_end + 1; i < buffer->size(); i++) {
+                                       nats_rest.push_back((*buffer)[i]);
+                                     }
                                  }
 #endif
 #ifdef SYSVIEW
